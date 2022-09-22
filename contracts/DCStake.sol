@@ -7,13 +7,9 @@ import "./Ownable.sol";
 
 contract DCStake is Ownable {
     struct UserInfo {
-        uint256 amount;
+        uint256 stakedAmount;
         uint256 startTime;
         uint256 pendingReward;
-    }
-
-    struct PoolInfo {
-        uint256 totalAmount;
     }
 
     uint256 constant lockTime0 = 3 hours;
@@ -21,128 +17,210 @@ contract DCStake is Ownable {
     uint256 constant lockTime2 = 14 days;
     uint256 constant lockTime3 = 28 days;
 
-    uint256 constant rewardRate0 = 4; // 4/8=0.5
-    uint256 constant rewardRate1 = 6;
-    uint256 constant rewardRate2 = 7;
-    uint256 constant rewardRate3 = 8;
+    uint256 constant claimPeriod0 = 3 hours;
+    uint256 constant claimPeriod123 = 1 days;
 
-    address public treasury;
+    uint256 constant MIN_DEPOSIT_AMOUNT = 10_000 * 10**18; // minimum deposit limit is 10K. decimals is 18
+    uint256 constant DENOMINATOR = 1000; // 1 is 0.1%, 1000 is 100%
+
+    uint256 constant rewardRate0 = 5; // 40/8=5
+    uint256 constant rewardRate1 = 60;
+    uint256 constant rewardRate2 = 70;
+    uint256 constant rewardRate3 = 80;
+
+    uint256 constant devFee = 75;
+    uint256 constant contractFee = 25;
+
+    uint256 constant referralsRate = 50;
+
+    address public devAddress;
+
     IERC20 public token;
+    uint256[] public stakedTotalAmounts = [0, 0, 0, 0]; // Total Staked Amounts Array on Each Staking pool
 
-    function setTreasury(address _treasury) public onlyOwner {
-        require(treasury != _treasury, "DCStake: SAME_ADDRESS");
+    mapping(address => address) public referrals;
+    mapping(uint256 => mapping(address => UserInfo)) public userInfo;
+
+    event LogSetToken(address indexed token);
+    event LogDevAddress(address indexed devAddress);
+    event LogDeposit(
+        address indexed user,
+        uint256 indexed poolID,
+        uint256 indexed amount
+    );
+    event LogWithdrawReward(
+        address indexed user,
+        uint256 indexed poolID,
+        uint256 indexed pendingReward
+    );
+    event LogWithdraw(
+        address indexed user,
+        uint256 indexed poolID,
+        uint256 indexed stakedAmount
+    );
+
+    constructor(IERC20 _token, address _devAddress) {
+        setToken(_token);
+        setDevAddress(_devAddress);
     }
 
-    // mapping(address => address) public referrals;
+    function setToken(IERC20 _token) public onlyOwner {
+        require(address(token) != address(_token), "DCStake: SAME_ADDRESS");
+        token = _token;
 
-    // PoolInfo[] public poolInfo;
-    // mapping(uint256 => mapping(address => UserInfo)) public userInfo;
+        emit LogSetToken(address(token));
+    }
 
-    // address payable public treasury;
-    // mapping(address => address) public referralsA;
-    // mapping(address => uint256) public referralClaim;
+    function setDevAddress(address _devAddress) public onlyOwner {
+        require(_devAddress != address(0), "DCStake: ZERO_ADDRESS");
+        require(devAddress != _devAddress, "DCStake: SAME_ADDRESS");
+        devAddress = _devAddress;
 
-    // struct StakeHolder {
-    //     uint256 stakingAmount;
-    //     uint256 stakingDate;
-    //     uint256 stakingDuration;
-    //     uint256 claimDate;
-    //     uint256 expireDate;
-    //     uint256 rewardAmount;
-    //     bool isStaker;
-    // }
+        emit LogDevAddress(devAddress);
+    }
 
-    // mapping(address => mapping(uint256 => StakeHolder)) public stakeHolders;
+    function deposit(
+        uint256 _poolID,
+        uint256 _amount,
+        address _referral
+    ) external {
+        require(
+            _amount >= MIN_DEPOSIT_AMOUNT,
+            "DCStake: LESS_THAN_MIN_DEPOSIT_AMOUNT"
+        );
+        uint256 _pendingReward = pendingReward(_poolID, msg.sender);
 
-    // uint256[] internal stakePeriod = [7 days, 14 days, 28 days, 3 hours];
-    // uint256[] internal rate = [142, 198, 224, 5];
-    // uint256 private decimals = 10**18;
-    // uint256 private totalRewardAmount;
+        require(
+            token.transferFrom(msg.sender, address(this), _amount),
+            "DCStake: FAIL_TRANSFERFROM"
+        );
 
-    // constructor(address payable _treasury) {
-    //     treasury = _treasury;
-    // }
+        userInfo[_poolID][msg.sender].stakedAmount += _amount;
+        userInfo[_poolID][msg.sender].pendingReward += _pendingReward;
+        userInfo[_poolID][msg.sender].startTime = block.timestamp;
 
-    // function staking(
-    //     uint256 _amount,
-    //     uint256 _duration,
-    //     address ref
-    // ) public {
-    //     if (ref == msg.sender) {
-    //         ref = address(0);
-    //     }
-    //     if (referralsA[msg.sender] == address(0)) {
-    //         referralsA[msg.sender] = ref;
-    //     }
-    //     // require(_amount >= 10000, "Insufficient Stake Amount");
-    //     require(_duration < 4, "Duration not match");
+        stakedTotalAmounts[_poolID] += _amount;
 
-    //     StakeHolder storage s = stakeHolders[msg.sender][_duration];
-    //     s.stakingAmount = _amount * decimals;
-    //     s.stakingDate = block.timestamp;
-    //     s.claimDate = block.timestamp;
-    //     s.stakingDuration = stakePeriod[_duration];
-    //     s.expireDate = s.stakingDate + s.stakingDuration;
-    //     s.isStaker = true;
-    // }
+        if (referrals[msg.sender] == address(0)) {
+            referrals[msg.sender] = _referral;
+        }
 
-    // function calculateReward(address account, uint256 _duration)
-    //     public
-    //     pure
-    //     returns (uint256)
-    // {
-    //     StakeHolder storage s = stakeHolders[account][_duration];
-    //     require(s.isStaker == true, "You are not staker.");
-    //     bool status = (block.timestamp - s.claimDate) > 7 seconds
-    //         ? true
-    //         : false;
-    //     require(status == true, "Invalid Claim Date");
+        emit LogDeposit(msg.sender, _poolID, _amount);
+    }
 
-    //     uint256 currentTime = block.timestamp >= s.expireDate
-    //         ? s.expireDate
-    //         : block.timestamp;
-    //     uint256 _pastTime = currentTime - s.claimDate;
-    //     require(_pastTime >= stakePeriod[_duration], "Invalid Claim Date");
+    function pendingReward(uint256 _poolID, address _user)
+        public
+        view
+        returns (uint256 rewardsAmount)
+    {
+        (, uint256 claimPeriod, uint256 rewardRate) = getPoolParams(_poolID);
+        uint256 stakedAmount = userInfo[_poolID][_user].stakedAmount;
 
-    //     uint256 reward = 0;
-    //     if (_duration == 3) {
-    //         uint256 cnt = _pastTime / (3 * 3600);
-    //         reward =
-    //             s.stakingAmount +
-    //             (rate[_duration] * s.stakingAmount * cnt) /
-    //             (1000);
-    //     } else {
-    //         reward = (s.stakingAmount * rate[_duration]) / 1000;
-    //     }
+        rewardsAmount = userInfo[_poolID][_user].pendingReward;
+        if (stakedAmount > 0 && rewardRate > 0) {
+            rewardsAmount +=
+                (stakedAmount *
+                    rewardRate *
+                    (block.timestamp - userInfo[_poolID][_user].startTime)) /
+                (claimPeriod * DENOMINATOR);
+        }
+    }
 
-    //     s.claimDate = block.timestamp;
-    //     s.isStaker = false;
-    //     return reward;
-    // }
+    function _withdrawReward(uint256 _poolID)
+        internal
+        returns (bool canWithdraw)
+    {
+        (uint256 lockTime, , ) = getPoolParams(_poolID);
 
-    // function calculateRewardAll(address account) public pure returns (uint256) {
-    //     return
-    //         calculateReward(account, 0) +
-    //         calculateReward(account, 1) +
-    //         calculateReward(account, 2) +
-    //         calculateReward(account, 3);
-    // }
+        canWithdraw =
+            block.timestamp >=
+            userInfo[_poolID][msg.sender].startTime + lockTime;
 
-    // function claim() public {
-    //     totalRewardAmount = calculateRewardAll(msg.sender);
-    //     uint256 fee = devFee(totalRewardAmount);
-    //     (bool sent1, ) = treasury.call{value: 3 * fee}("");
-    //     require(sent1, "ETH transfer Fail");
+        if (canWithdraw) {
+            uint256 _pendingReward = pendingReward(_poolID, msg.sender);
 
-    //     (bool sent, ) = msg.sender.call{value: totalRewardAmount - 4 * fee}("");
-    //     require(sent, "ETH transfer Fail");
-    // }
+            userInfo[_poolID][msg.sender].pendingReward = 0;
+            userInfo[_poolID][msg.sender].startTime = block.timestamp;
 
-    // function devFee(uint256 amount) public pure returns (uint256) {
-    //     return (amount * 25) / 1000;
-    // }
+            token.transfer(devAddress, (_pendingReward * devFee) / DENOMINATOR);
+            // contractFee will remain in this contract
+            token.transfer(
+                msg.sender,
+                (_pendingReward * (DENOMINATOR - devFee - contractFee)) /
+                    DENOMINATOR
+            );
 
-    // function getBalance() external view returns (uint256) {
-    //     return address(this).balance;
-    // }
+            emit LogWithdrawReward(msg.sender, _poolID, _pendingReward);
+        }
+    }
+
+    function withdrawReward(uint256 _poolID) public {
+        require(_withdrawReward(_poolID), "DCStake: IN_LOCKTIME");
+    }
+
+    function withdrawAllReward() public {
+        require(
+            _withdrawReward(0) ||
+                _withdrawReward(1) ||
+                _withdrawReward(2) ||
+                _withdrawReward(3),
+            "DCStake: IN_LOCKTIME"
+        );
+    }
+
+    function withdraw(uint256 _poolID) public {
+        withdrawReward(_poolID);
+
+        uint256 stakedAmount = userInfo[_poolID][msg.sender].stakedAmount;
+
+        token.transfer(devAddress, (stakedAmount * devFee) / DENOMINATOR);
+        // contractFee will remain in this contract
+        token.transfer(
+            msg.sender,
+            (stakedAmount * (DENOMINATOR - devFee - contractFee)) / DENOMINATOR
+        );
+
+        userInfo[_poolID][msg.sender].stakedAmount = 0;
+
+        emit LogWithdraw(msg.sender, _poolID, stakedAmount);
+    }
+
+    function withdrawAll() external {
+        withdraw(0);
+        withdraw(1);
+        withdraw(2);
+        withdraw(3);
+    }
+
+    function getPoolParams(uint256 _poolID)
+        public
+        pure
+        returns (
+            uint256 lockTime,
+            uint256 claimPeriod,
+            uint256 rewardRate
+        )
+    {
+        if (_poolID == 0) {
+            lockTime = lockTime0;
+            claimPeriod = claimPeriod0;
+            rewardRate = rewardRate0;
+        } else if (_poolID == 1) {
+            lockTime = lockTime1;
+            claimPeriod = claimPeriod123;
+            rewardRate = rewardRate1;
+        } else if (_poolID == 2) {
+            lockTime = lockTime2;
+            claimPeriod = claimPeriod123;
+            rewardRate = rewardRate2;
+        } else if (_poolID == 3) {
+            lockTime = lockTime3;
+            claimPeriod = claimPeriod123;
+            rewardRate = rewardRate3;
+        } else {
+            lockTime = 0;
+            claimPeriod = 0;
+            rewardRate = 0;
+        }
+    }
 }
