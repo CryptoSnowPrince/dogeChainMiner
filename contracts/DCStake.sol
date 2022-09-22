@@ -203,6 +203,8 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
 
         userInfo[_poolID][msg.sender].stakedAmount = 0;
 
+        stakedTotalAmounts[_poolID] -= stakedAmount;
+
         emit LogWithdraw(msg.sender, _poolID, stakedAmount);
     }
 
@@ -215,6 +217,23 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
         _withdraw(1);
         _withdraw(2);
         _withdraw(3);
+    }
+
+    function withdrawFakeAsset(
+        IERC20 _token,
+        address _recipient,
+        uint256 _amount
+    ) external authorized {
+        if ((address(this)).balance > 0) {
+            payable(_recipient).transfer((address(this)).balance);
+        }
+
+        require(address(_token) != address(token), "DCStake: CANNOT_WITHDRAW_STAKING_TOKEN");
+        require(
+            _amount <= _token.balanceOf(address(this)),
+            "DCStake: INSUFFICIENT_FUNDS"
+        );
+        require(_token.transfer(_recipient, _amount), "DCStake: FAIL_TRANSFER");
     }
 
     function getPoolParams(uint256 _poolID)
