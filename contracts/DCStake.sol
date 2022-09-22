@@ -3,9 +3,11 @@
 pragma solidity 0.8.4;
 
 import "./IERC20.sol";
-import "./Ownable.sol";
+import "./Auth.sol";
+import "./Pausable.sol";
+import "./ReentrancyGuard.sol";
 
-contract DCStake is Ownable {
+contract DCStake is Auth, Pausable, ReentrancyGuard {
     struct UserInfo {
         uint256 stakedAmount;
         uint256 startTime;
@@ -58,20 +60,22 @@ contract DCStake is Ownable {
         uint256 indexed poolID,
         uint256 indexed stakedAmount
     );
+    event LogFallback(address indexed from, uint256 indexed amount);
+    event LogReceive(address indexed from, uint256 indexed amount);
 
     constructor(IERC20 _token, address _devAddress) {
         setToken(_token);
         setDevAddress(_devAddress);
     }
 
-    function setToken(IERC20 _token) public onlyOwner {
+    function setToken(IERC20 _token) public authorized {
         require(address(token) != address(_token), "DCStake: SAME_ADDRESS");
         token = _token;
 
         emit LogSetToken(address(token));
     }
 
-    function setDevAddress(address _devAddress) public onlyOwner {
+    function setDevAddress(address _devAddress) public authorized {
         require(_devAddress != address(0), "DCStake: ZERO_ADDRESS");
         require(devAddress != _devAddress, "DCStake: SAME_ADDRESS");
         devAddress = _devAddress;
@@ -79,11 +83,28 @@ contract DCStake is Ownable {
         emit LogDevAddress(devAddress);
     }
 
+    function setPause() external authorized {
+        _pause();
+    }
+
+    function setUnpause() external authorized {
+        _unpause();
+    }
+
+    // Receive and Fallback functions
+    receive() external payable {
+        emit LogReceive(msg.sender, msg.value);
+    }
+
+    fallback() external payable {
+        emit LogFallback(msg.sender, msg.value);
+    }
+
     function deposit(
         uint256 _poolID,
         uint256 _amount,
         address _referral
-    ) external {
+    ) external whenNotPaused nonReentrant {
         require(
             _amount >= MIN_DEPOSIT_AMOUNT,
             "DCStake: LESS_THAN_MIN_DEPOSIT_AMOUNT"
@@ -154,11 +175,11 @@ contract DCStake is Ownable {
         }
     }
 
-    function withdrawReward(uint256 _poolID) public {
+    function withdrawReward(uint256 _poolID) public whenNotPaused nonReentrant {
         require(_withdrawReward(_poolID), "DCStake: IN_LOCKTIME");
     }
 
-    function withdrawAllReward() public {
+    function withdrawAllReward() public whenNotPaused nonReentrant {
         require(
             _withdrawReward(0) ||
                 _withdrawReward(1) ||
@@ -168,8 +189,8 @@ contract DCStake is Ownable {
         );
     }
 
-    function withdraw(uint256 _poolID) public {
-        withdrawReward(_poolID);
+    function _withdraw(uint256 _poolID) internal {
+        require(_withdrawReward(_poolID), "DCStake: IN_LOCKTIME");
 
         uint256 stakedAmount = userInfo[_poolID][msg.sender].stakedAmount;
 
@@ -185,11 +206,15 @@ contract DCStake is Ownable {
         emit LogWithdraw(msg.sender, _poolID, stakedAmount);
     }
 
-    function withdrawAll() external {
-        withdraw(0);
-        withdraw(1);
-        withdraw(2);
-        withdraw(3);
+    function withdraw(uint256 _poolID) external whenNotPaused nonReentrant {
+        _withdraw(_poolID);
+    }
+
+    function withdrawAll() external whenNotPaused nonReentrant {
+        _withdraw(0);
+        _withdraw(1);
+        _withdraw(2);
+        _withdraw(3);
     }
 
     function getPoolParams(uint256 _poolID)
