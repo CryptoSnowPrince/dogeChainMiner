@@ -122,7 +122,7 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
 
         stakedTotalAmounts[_poolID] += _amount;
 
-        if (referrals[msg.sender] == address(0)) {
+        if (referrals[msg.sender] == address(0) && _referral != msg.sender) {
             referrals[msg.sender] = _referral;
         }
 
@@ -164,10 +164,16 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
             userInfo[_poolID][msg.sender].startTime = block.timestamp;
 
             token.transfer(devAddress, (_pendingReward * devFee) / DENOMINATOR);
-            // contractFee will remain in this contract
+            if (referrals[msg.sender] != address(0)) {
+                token.transfer(
+                    referrals[msg.sender],
+                    (_pendingReward * referralsRate) / DENOMINATOR
+                );
+            }
             token.transfer(
                 msg.sender,
-                (_pendingReward * (DENOMINATOR - devFee - contractFee)) /
+                (_pendingReward *
+                    (DENOMINATOR - devFee - contractFee - referralsRate)) /
                     DENOMINATOR
             );
 
@@ -195,10 +201,17 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
         uint256 stakedAmount = userInfo[_poolID][msg.sender].stakedAmount;
 
         token.transfer(devAddress, (stakedAmount * devFee) / DENOMINATOR);
-        // contractFee will remain in this contract
+        if (referrals[msg.sender] != address(0)) {
+            token.transfer(
+                referrals[msg.sender],
+                (stakedAmount * referralsRate) / DENOMINATOR
+            );
+        }
         token.transfer(
             msg.sender,
-            (stakedAmount * (DENOMINATOR - devFee - contractFee)) / DENOMINATOR
+            (stakedAmount *
+                (DENOMINATOR - devFee - contractFee - referralsRate)) /
+                DENOMINATOR
         );
 
         userInfo[_poolID][msg.sender].stakedAmount = 0;
