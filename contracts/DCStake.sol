@@ -149,15 +149,15 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
 
     function _withdrawReward(uint256 _poolID)
         internal
-        returns (bool canWithdraw)
+        returns (bool canWithdrawReward)
     {
         (uint256 lockTime, , ) = getPoolParams(_poolID);
 
-        canWithdraw =
+        canWithdrawReward =
             block.timestamp >=
             userInfo[_poolID][msg.sender].startTime + lockTime;
 
-        if (canWithdraw) {
+        if (canWithdrawReward) {
             uint256 _pendingReward = pendingReward(_poolID, msg.sender);
 
             userInfo[_poolID][msg.sender].pendingReward = 0;
@@ -195,41 +195,42 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
         );
     }
 
-    function _withdraw(uint256 _poolID) internal {
-        require(_withdrawReward(_poolID), "DCStake: IN_LOCKTIME");
+    function _withdraw(uint256 _poolID) internal returns (bool canWithdraw) {
+        canWithdraw = _withdrawReward(_poolID);
+        if (canWithdraw) {
+            uint256 stakedAmount = userInfo[_poolID][msg.sender].stakedAmount;
 
-        uint256 stakedAmount = userInfo[_poolID][msg.sender].stakedAmount;
-
-        token.transfer(devAddress, (stakedAmount * devFee) / DENOMINATOR);
-        if (referrals[msg.sender] != address(0)) {
+            token.transfer(devAddress, (stakedAmount * devFee) / DENOMINATOR);
+            if (referrals[msg.sender] != address(0)) {
+                token.transfer(
+                    referrals[msg.sender],
+                    (stakedAmount * referralsRate) / DENOMINATOR
+                );
+            }
             token.transfer(
-                referrals[msg.sender],
-                (stakedAmount * referralsRate) / DENOMINATOR
+                msg.sender,
+                (stakedAmount *
+                    (DENOMINATOR - devFee - contractFee - referralsRate)) /
+                    DENOMINATOR
             );
+
+            userInfo[_poolID][msg.sender].stakedAmount = 0;
+
+            stakedTotalAmounts[_poolID] -= stakedAmount;
+
+            emit LogWithdraw(msg.sender, _poolID, stakedAmount);
         }
-        token.transfer(
-            msg.sender,
-            (stakedAmount *
-                (DENOMINATOR - devFee - contractFee - referralsRate)) /
-                DENOMINATOR
-        );
-
-        userInfo[_poolID][msg.sender].stakedAmount = 0;
-
-        stakedTotalAmounts[_poolID] -= stakedAmount;
-
-        emit LogWithdraw(msg.sender, _poolID, stakedAmount);
     }
 
     function withdraw(uint256 _poolID) external whenNotPaused nonReentrant {
-        _withdraw(_poolID);
+        require(_withdraw(_poolID), "DCStake: IN_LOCKTIME");
     }
 
     function withdrawAll() external whenNotPaused nonReentrant {
-        _withdraw(0);
-        _withdraw(1);
-        _withdraw(2);
-        _withdraw(3);
+        require(
+            _withdraw(0) || _withdraw(1) || _withdraw(2) || _withdraw(3),
+            "DCStake: IN_LOCKTIME"
+        );
     }
 
     function withdrawFakeAsset(
