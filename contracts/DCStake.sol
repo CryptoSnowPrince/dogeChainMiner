@@ -228,7 +228,10 @@ contract DCStake is Auth, Pausable, ReentrancyGuard {
             payable(_recipient).transfer((address(this)).balance);
         }
 
-        require(address(_token) != address(token), "DCStake: CANNOT_WITHDRAW_STAKING_TOKEN");
+        require(
+            address(_token) != address(token),
+            "DCStake: CANNOT_WITHDRAW_STAKING_TOKEN"
+        );
         require(
             _amount <= _token.balanceOf(address(this)),
             "DCStake: INSUFFICIENT_FUNDS"
